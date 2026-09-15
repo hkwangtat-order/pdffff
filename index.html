@@ -4,8 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>PDF 快速合併工具</title>
-  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.9/dist/pdf-lib.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  <!-- 主線路：Cloudflare CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.9/pdf-lib.min.js"></script>
+  <!-- 備用線路：如未載入成功則自動備援 -->
+  <script>
+    if (typeof PDFLib === 'undefined') {
+      document.write('<script src="https://unpkg.com/pdf-lib@1.17.9/dist/pdf-lib.min.js"><\/script>');
+    }
+  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
   <style>
     :root {
       --primary: #2563eb;
@@ -87,14 +94,16 @@
   const fileList = document.getElementById('fileList');
   const mergeBtn = document.getElementById('mergeBtn');
 
-  new Sortable(fileList, {
-    handle: '.drag-handle',
-    animation: 150,
-    onEnd: (evt) => {
-      const movedItem = filesArray.splice(evt.oldIndex, 1)[0];
-      filesArray.splice(evt.newIndex, 0, movedItem);
-    }
-  });
+  if (typeof Sortable !== 'undefined') {
+    new Sortable(fileList, {
+      handle: '.drag-handle',
+      animation: 150,
+      onEnd: (evt) => {
+        const movedItem = filesArray.splice(evt.oldIndex, 1)[0];
+        filesArray.splice(evt.newIndex, 0, movedItem);
+      }
+    });
+  }
 
   fileInput.addEventListener('change', (e) => {
     const selectedFiles = Array.from(e.target.files);
@@ -126,6 +135,11 @@
   };
 
   mergeBtn.addEventListener('click', async () => {
+    if (typeof PDFLib === 'undefined') {
+      alert('核心元件載入失敗，請檢查網路連線或重新整理頁面。');
+      return;
+    }
+
     if (filesArray.length < 2) return;
 
     mergeBtn.disabled = true;
@@ -136,31 +150,46 @@
 
       for (let i = 0; i < filesArray.length; i++) {
         const file = filesArray[i];
-        mergeBtn.innerText = `正在處理 (${i + 1}/${filesArray.length}): ${file.name}`;
+        mergeBtn.innerText = `處理中 (${i + 1}/${filesArray.length}): ${file.name}`;
         
         const arrayBuffer = await file.arrayBuffer();
-        
-        // 加入容錯參數 ignoreEncryption 與 throwOnInvalidObject
-        const pdf = await PDFLib.PDFDocument.load(arrayBuffer, { 
-          ignoreEncryption: true,
-          throwOnInvalidObject: false 
-        });
+        let pdf;
+
+        try {
+          // 嘗試以寬鬆模式載入月結單
+          pdf = await PDFLib.PDFDocument.load(arrayBuffer, { 
+            ignoreEncryption: true,
+            throwOnInvalidObject: false 
+          });
+        } catch (loadErr) {
+          // 若檔案有設定開啟密碼，向用戶索取密碼
+          if (loadErr.message && loadErr.message.includes('encrypted')) {
+            const pwd = prompt(`檔案 [${file.name}] 設有開啟密碼，請輸入密碼以解密：`);
+            if (!pwd) throw new Error(`取消了解密：${file.name}`);
+            pdf = await PDFLib.PDFDocument.load(arrayBuffer, { 
+              password: pwd,
+              throwOnInvalidObject: false 
+            });
+          } else {
+            throw loadErr;
+          }
+        }
 
         const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
         copiedPages.forEach((page) => mergedPdf.addPage(page));
       }
 
-      mergeBtn.innerText = '正在生成檔案...';
+      mergeBtn.innerText = '正在匯出檔案...';
       const mergedPdfBytes = await mergedPdf.save();
 
-      // 適配 iOS Safari 的 Base64 下載相容方案
+      // 相容 iOS Safari 的下載機制
       const blob = new Blob([mergedPdfBytes], { type: 'application/pdf' });
       const reader = new FileReader();
       reader.onloadend = function() {
         const dataUrl = reader.result;
         const a = document.createElement('a');
         a.href = dataUrl;
-        a.download = `merged_${Date.now()}.pdf`;
+        a.download = `月結單合併_${Date.now()}.pdf`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -168,7 +197,7 @@
       reader.readAsDataURL(blob);
 
     } catch (err) {
-      alert('處理失敗詳細原因：' + err.message);
+      alert('處理失敗：' + (err.message || err));
       console.error(err);
     } finally {
       mergeBtn.disabled = false;
