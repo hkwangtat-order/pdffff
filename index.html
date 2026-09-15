@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF 快速合併工具</title>
+  <!-- 載入純前端 PDF 處理庫與拖曳庫 -->
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.9/dist/pdf-lib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #1e293b;
+      --border: #e2e8f0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 16px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 480px; background: var(--card); border-radius: 16px; padding: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+    h1 { font-size: 1.25rem; text-align: center; margin-bottom: 8px; }
+    p.sub { font-size: 0.85rem; color: #64748b; text-align: center; margin-bottom: 20px; }
+    
+    .upload-box {
+      border: 2px dashed #cbd5e1;
+      border-radius: 12px;
+      padding: 24px 16px;
+      text-align: center;
+      cursor: pointer;
+      background: #f1f5f9;
+      margin-bottom: 20px;
+    }
+    .upload-box:active { background: #e2e8f0; }
+    .upload-box input { display: none; }
+    .upload-text { font-size: 0.95rem; font-weight: 600; color: var(--primary); }
+
+    .file-list { list-style: none; margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px; }
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      touch-action: pan-y;
+    }
+    .file-info { display: flex; align-items: center; gap: 10px; overflow: hidden; }
+    .drag-handle { color: #94a3b8; font-size: 1.2rem; cursor: grab; user-select: none; }
+    .file-name { font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+    .btn-remove { background: none; border: none; color: #ef4444; font-size: 1.1rem; cursor: pointer; padding: 4px; }
+
+    .btn-merge {
+      width: 100%;
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-merge:disabled { background: #94a3b8; cursor: not-allowed; }
+    .btn-merge:active:not(:disabled) { background: var(--primary-hover); }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>PDF 快速合併</h1>
+  <p class="sub">本地安全處理，檔案絕不上傳伺服器</p>
+
+  <label class="upload-box">
+    <div class="upload-text">+ 選擇或多選 PDF 檔案</div>
+    <input type="file" id="fileInput" accept="application/pdf" multiple>
+  </label>
+
+  <ul class="file-list" id="fileList"></ul>
+
+  <button class="btn-merge" id="mergeBtn" disabled>
+    <span>合併並下載 PDF</span>
+  </button>
+</div>
+
+<script>
+  let filesArray = [];
+  const fileInput = document.getElementById('fileInput');
+  const fileList = document.getElementById('fileList');
+  const mergeBtn = document.getElementById('mergeBtn');
+
+  // 初始化拖曳排序功能 (手機長按即可上下拖動排序)
+  new Sortable(fileList, {
+    handle: '.drag-handle',
+    animation: 150,
+    onEnd: (evt) => {
+      const movedItem = filesArray.splice(evt.oldIndex, 1)[0];
+      filesArray.splice(evt.newIndex, 0, movedItem);
+    }
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    const selectedFiles = Array.from(e.target.files);
+    filesArray.push(...selectedFiles);
+    renderList();
+    fileInput.value = ''; // 清空以允許重複選擇相同檔案名
+  });
+
+  function renderList() {
+    fileList.innerHTML = '';
+    filesArray.forEach((file, index) => {
+      const li = document.createElement('li');
+      li.className = 'file-item';
+      li.innerHTML = `
+        <div class="file-info">
+          <span class="drag-handle">☰</span>
+          <span class="file-name">${file.name}</span>
+        </div>
+        <button class="btn-remove" onclick="removeFile(${index})">✕</button>
+      `;
+      fileList.appendChild(li);
+    });
+
+    mergeBtn.disabled = filesArray.length < 2;
+  }
+
+  window.removeFile = function(index) {
+    filesArray.splice(index, 1);
+    renderList();
+  };
+
+  mergeBtn.addEventListener('click', async () => {
+    if (filesArray.length < 2) return;
+
+    mergeBtn.disabled = true;
+    mergeBtn.innerText = '處理中，請稍候...';
+
+    try {
+      const mergedPdf = await PDFLib.PDFDocument.create();
+
+      for (const file of filesArray) {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await PDFLib.PDFDocument.load(arrayBuffer);
+        const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+        copiedPages.forEach((page) => mergedPdf.addPage(page));
+      }
+
+      const mergedPdfBytes = await mergedPdf.save();
+      const blob = new Blob([mergedPdfBytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+
+      // 自動觸發下載
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `merged_${Date.now()}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('合併失敗：請確認檔案是否已損毀或設有密碼保護。');
+      console.error(err);
+    } finally {
+      mergeBtn.disabled = false;
+      mergeBtn.innerText = '合併並下載 PDF';
+    }
+  });
+</script>
+
+</body>
+</html>
